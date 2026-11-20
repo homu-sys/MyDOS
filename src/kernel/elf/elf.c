@@ -1,6 +1,8 @@
 #include <mydos.h>
 #include <elf/elf.h>
+#include <kernel/system/identity.h>
 #include <lib/user_api.h>
+#include <shell/env.h>
 #include <ff.h>
 
 #define ELF_PT_LOAD 1u
@@ -11,11 +13,39 @@
 
 extern uint8_t _kernel_end;
 
+static uint32_t user_next_load_base;
+
+static const char *user_getenv(const char *name) {
+    return shell_env_get(name);
+}
+
+static const char *user_hostname(void) {
+    return identity_hostname();
+}
+
+static const char *user_username(void) {
+    return identity_username();
+}
+
+static int user_cursor_y(void) {
+    return shell_get_cursor_y();
+}
+
+static void user_set_cursor_y(int cursor_y) {
+    shell_set_cursor_y(cursor_y);
+}
+
 static const mydos_user_api_t user_api = {
-    1,
+    MYDOS_USER_API_VERSION,
     print,
     scrl,
-    keyboard_getchar
+    keyboard_getchar,
+    shell_execute_line,
+    user_getenv,
+    user_hostname,
+    user_username,
+    user_cursor_y,
+    user_set_cursor_y
 };
 
 static uint16_t elf_read16(const uint8_t *bytes) {
@@ -147,21 +177,34 @@ int elf_run(const char *path, unsigned int mbi, int argc, char **argv,
     }
 
     uint32_t kernel_end = (uint32_t)&_kernel_end;
-    uint32_t load_base = ELF_USER_BASE;
-    if (load_base < kernel_end + 0x00100000u) {
-        load_base = (kernel_end + 0x00100000u) & 0xFFF00000u;
+    uint32_t required_base = kernel_end + 0x00100000u;
+    uint32_t load_base = user_next_load_base;
+    if (load_base == 0 || load_base < required_base) {
+        load_base = (required_base + 0x000FFFFFu) & 0xFFF00000u;
     }
-    if (load_base < kernel_end + 0x00100000u ||
-        !elf_range_usable(mbi, load_base, load_base + maximum) ||
-        entry_offset < ELF_MIN_VADDR || entry_offset >= maximum) {
+
+    int range_found = 0;
+    for (uint32_t attempt = 0; attempt < 16u; attempt++) {
+        if (load_base >= required_base &&
+            load_base + maximum >= load_base &&
+            elf_range_usable(mbi, load_base, load_base + maximum)) {
+            range_found = 1;
+            break;
+        }
+        load_base += 0x00100000u;
+    }
+    if (!range_found || entry_offset < ELF_MIN_VADDR || entry_offset >= maximum) {
         f_close(&file);
         return 0;
     }
 
     for (uint16_t i = 0; i < phdr_count; i++) {
         if (f_lseek(&file, phdr_offset + i * phdr_size) != FR_OK ||
-            !elf_read_exact(&file, phdr, sizeof(phdr)) ||
-            elf_read32(phdr) != ELF_PT_LOAD) {
+            !elf_read_exact(&file, phdr, sizeof(phdr))) {
+            f_close(&file);
+            return 0;
+        }
+        if (elf_read32(phdr) != ELF_PT_LOAD) {
             continue;
         }
         uint32_t file_offset = elf_read32(phdr + 4);
@@ -183,8 +226,13 @@ int elf_run(const char *path, unsigned int mbi, int argc, char **argv,
     }
     f_close(&file);
 
+    uint32_t previous_next_load_base = user_next_load_base;
+    uint32_t slot_size = (maximum + 0x000FFFFFu) & 0xFFF00000u;
+    user_next_load_base = load_base + slot_size;
+
     mydos_user_entry_t entry =
         (mydos_user_entry_t)(uintptr_t)(load_base + entry_offset);
     *exit_code = entry(argc, argv, &user_api);
+    user_next_load_base = previous_next_load_base;
     return 1;
 }

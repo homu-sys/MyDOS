@@ -1,4 +1,5 @@
 #include <mydos.h>
+#include <kernel/system/identity.h>
 #include "prompt.h"
 
 static char ps1[SHELL_PROMPT_MAX] = "\\h:[\\u]\\$ ";
@@ -67,10 +68,10 @@ int shell_prompt_render(int cursor_y, int *cursor_x) {
             value++;
             switch (*value) {
                 case 'h':
-                    prompt_puts("MyDOS", GREEN, cursor_y, cursor_x);
+                    prompt_puts(identity_hostname(), GREEN, cursor_y, cursor_x);
                     break;
                 case 'u':
-                    prompt_puts("root", LIGHT_RED, cursor_y, cursor_x);
+                    prompt_puts(identity_username(), LIGHT_RED, cursor_y, cursor_x);
                     break;
                 case 'w':
                     prompt_puts(cwd, LIGHT_CYAN, cursor_y, cursor_x);

@@ -33,6 +33,9 @@
 void KernelEntryPoint(unsigned int magic, unsigned int mbi);
 void scrl(int *cursor_y);
 void shell_run(unsigned int mbi, int cursor_y);
+int shell_execute_line(const char *line, int *cursor_y);
+int shell_get_cursor_y(void);
+void shell_set_cursor_y(int cursor_y);
 
 void move_cursor(int x, int y);
 void print_logo_at(int x, int y);

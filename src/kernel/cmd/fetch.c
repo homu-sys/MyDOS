@@ -1,4 +1,5 @@
 #include <cmd/cmd.h>
+#include <kernel/system/identity.h>
 #include <version.h>
 
 void cmd_fetch(char *args, int *cursor_y) {
@@ -22,8 +23,12 @@ void cmd_fetch(char *args, int *cursor_y) {
 
     print_logo_at(0, *cursor_y);
     print("+--KEYS---------+--VALUES----------+", BLUE, 40, *cursor_y);
-    print("| User          | root             |", RED, 40, *cursor_y + 1);
-    print("| Host          | MyDOS            |", GREEN, 40, *cursor_y + 2);
+    print("| User          | ", RED, 40, *cursor_y + 1);
+    print(identity_username(), WHITE, 58, *cursor_y + 1);
+    print("|", RED, 75, *cursor_y + 1);
+    print("| Host          | ", GREEN, 40, *cursor_y + 2);
+    print(identity_hostname(), WHITE, 58, *cursor_y + 2);
+    print("|", GREEN, 75, *cursor_y + 2);
     print("| Kernel        | ", BLUE, 40, *cursor_y + 3);
     print(KERNEL_VERSION, WHITE, 58, *cursor_y + 3);
     print("|", BLUE, 75, *cursor_y + 3);

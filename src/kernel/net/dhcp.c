@@ -1,4 +1,5 @@
 #include <mydos.h>
+#include <kernel/system/identity.h>
 #include <net/net.h>
 
 #define DHCP_SERVER_PORT 67
@@ -134,7 +135,7 @@ static int dhcp_build_options(uint8_t *options, uint8_t message_type,
     static const uint8_t parameter_list[] = {
         1, 3, 6, 12, 15, 28, 51, 54, 58, 59
     };
-    static const char hostname[] = "mydos";
+    const char *hostname = identity_hostname();
     const net_device_t *device = net_device();
     int position = 0;
 
@@ -159,7 +160,7 @@ static int dhcp_build_options(uint8_t *options, uint8_t message_type,
     }
 
     if (!option_add(options, &position, 12, hostname,
-                    (uint8_t)(sizeof(hostname) - 1))) {
+                    (uint8_t)strlen(hostname))) {
         return 0;
     }
 

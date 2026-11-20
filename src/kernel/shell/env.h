@@ -5,5 +5,6 @@
 
 const char *shell_env_get_path(void);
 void shell_env_set_path(const char *path);
+const char *shell_env_get(const char *name);
 
 #endif

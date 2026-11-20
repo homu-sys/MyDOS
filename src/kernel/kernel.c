@@ -1,4 +1,5 @@
 #include <mydos.h>
+#include <kernel/system/identity.h>
 
 // GRUB's Multiboot v1 handoff uses these flag bits to mark optional fields. 
 #define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002u
@@ -79,6 +80,7 @@ static const char *format_error_message(FRESULT result) {
 }
 
 void KernelEntryPoint(unsigned int magic, unsigned int mbi) {
+    identity_init();
     gdt_init();
     idt_init();
     fpu_init();

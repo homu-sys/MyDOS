@@ -21,6 +21,7 @@ static const cmd_entry_t commands[] = {
     {"fetch", cmd_fetch},
     {"flint", cmd_flint},
     {"help", cmd_help},
+    {"hostname", cmd_hostname},
     {"kp", cmd_kp},
     {"larry", cmd_larry},
     {"loadkeys", cmd_loadkeys},
@@ -41,6 +42,8 @@ static const cmd_entry_t commands[] = {
     {"shlogo", cmd_shlogo},
     {"shtdwn", cmd_shtdwn},
     {"uptime", cmd_uptime},
+    {"user", cmd_user},
+    {"whoami", cmd_whoami},
 };
 
 void cmd_set_mbi(unsigned int mbi) {

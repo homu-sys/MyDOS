@@ -4,17 +4,103 @@
 #include <net/net.h>
 #include <pkg/pkg.h>
 
-#define FLINT_INDEX_URL "http://distfiles.gentoo.org/releases/x86/binpackages/23.0/i686/Packages"
-#define FLINT_PKG_BASE "http://distfiles.gentoo.org/releases/x86/binpackages/23.0/i686/"
+#define FLINT_DEFAULT_INDEX_URL "http://10.0.2.2/Packages"
+#define FLINT_DEFAULT_PKG_BASE "http://10.0.2.2/"
+#define FLINT_SOURCE_PATH "FLINT/SOURCE.TXT"
 #define FLINT_INDEX_PATH "FLINT/PACKAGES.TXT"
 #define FLINT_PKG_DIR "FLINT/PACKAGES"
 #define FLINT_LINE_MAX 256
+#define FLINT_SOURCE_MAX 160
+
+static char flint_index_url[FLINT_SOURCE_MAX] = FLINT_DEFAULT_INDEX_URL;
+static char flint_pkg_base[FLINT_SOURCE_MAX] = FLINT_DEFAULT_PKG_BASE;
+
+static int flint_lower(int character);
+static int flint_prefix(const char *text, const char *prefix);
+static void flint_ensure_dirs(void);
 
 static void flint_copy(char *out, const char *text) {
     while (*text != '\0') {
         *out++ = *text++;
     }
     *out = '\0';
+}
+
+static int flint_ends_with(const char *text, const char *suffix) {
+    uint32_t text_length = strlen(text);
+    uint32_t suffix_length = strlen(suffix);
+    if (suffix_length > text_length) {
+        return 0;
+    }
+    return strcmp(text + text_length - suffix_length, suffix) == 0;
+}
+
+static int flint_is_host_token(const char *text) {
+    if (*text == '\0') {
+        return 0;
+    }
+    while (*text != '\0') {
+        if (!((*text >= 'a' && *text <= 'z') ||
+              (*text >= 'A' && *text <= 'Z') ||
+              (*text >= '0' && *text <= '9') ||
+              *text == '.' || *text == '-')) {
+            return 0;
+        }
+        text++;
+    }
+    return 1;
+}
+
+static void flint_build_urls(const char *base) {
+    uint32_t base_length = strlen(base);
+    flint_copy(flint_pkg_base, base);
+    if (base_length == 0 || flint_pkg_base[base_length - 1] != '/') {
+        flint_copy(flint_pkg_base + base_length, "/");
+        base_length++;
+    }
+    flint_copy(flint_index_url, flint_pkg_base);
+    flint_copy(flint_index_url + base_length, "Packages");
+}
+
+static void flint_load_source(void) {
+    FIL file;
+    if (f_open(&file, FLINT_SOURCE_PATH, FA_READ) != FR_OK) {
+        return;
+    }
+    char base[FLINT_SOURCE_MAX];
+    uint32_t position = 0;
+    BYTE character;
+    UINT read = 0;
+    while (f_read(&file, &character, 1, &read) == FR_OK && read == 1 &&
+           position + 1 < sizeof(base)) {
+        if (character == '\r' || character == '\n') {
+            break;
+        }
+        base[position++] = (char)character;
+    }
+    base[position] = '\0';
+    f_close(&file);
+    if (flint_prefix(base, "http://") && position > 0) {
+        flint_build_urls(base);
+    }
+}
+
+static int flint_save_source(const char *base) {
+    flint_ensure_dirs();
+    FIL file;
+    if (f_open(&file, FLINT_SOURCE_PATH, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
+        return 0;
+    }
+    UINT written = 0;
+    UINT length = (UINT)strlen(base);
+    if (f_write(&file, base, length, &written) != FR_OK ||
+        written != length) {
+        f_close(&file);
+        return 0;
+    }
+    f_write(&file, "\n", 1, &written);
+    f_close(&file);
+    return 1;
 }
 
 static int flint_lower(int character) {
@@ -118,28 +204,52 @@ static int flint_open_index(FIL *file, int *cursor_y) {
 
 static void flint_help(int *cursor_y) {
     flint_line("Usage: flint <command> [arguments]", WHITE, cursor_y);
-    flint_line("  sync                 download Gentoo x86 package index", LIGHT_GREY, cursor_y);
+    flint_line("  sync                 download MyDOS package index", LIGHT_GREY, cursor_y);
     flint_line("  search <term>        search cached package names", LIGHT_GREY, cursor_y);
     flint_line("  info <atom>          show package metadata", LIGHT_GREY, cursor_y);
     flint_line("  install <atom>       download and install a .gpkg.tar package", LIGHT_GREY, cursor_y);
     flint_line("  fetch <url> <dest>   download any plain HTTP URL", LIGHT_GREY, cursor_y);
-    flint_line("  source               show package source URL", LIGHT_GREY, cursor_y);
+    flint_line("  source [host|url]    show or set package source", LIGHT_GREY, cursor_y);
     flint_line("Packages are unpacked into BIN, USR, and ETC.", YELLOW, cursor_y);
 }
 
 static void flint_sync(int *cursor_y) {
     flint_ensure_dirs();
-    flint_line("flint: syncing Gentoo x86 package index...", WHITE, cursor_y);
-    if (net_http_get_file(FLINT_INDEX_URL, FLINT_INDEX_PATH)) {
+    flint_line("flint: syncing MyDOS package index...", WHITE, cursor_y);
+    if (net_http_get_file(flint_index_url, FLINT_INDEX_PATH)) {
         flint_line("flint: index saved to FLINT/PACKAGES.TXT", GREEN, cursor_y);
     } else {
-        flint_line("flint: sync failed", RED, cursor_y);
+        flint_line("flint: sync failed; source: ", RED, cursor_y);
+        print(flint_index_url, WHITE, 29, *cursor_y - 1);
     }
 }
 
-static void flint_source(int *cursor_y) {
-    flint_line("flint source: " FLINT_INDEX_URL, WHITE, cursor_y);
-    flint_line("packages base: " FLINT_PKG_BASE, LIGHT_GREY, cursor_y);
+static void flint_source(const char *base, int *cursor_y) {
+    if (base != 0) {
+        char normalized[FLINT_SOURCE_MAX];
+        if (flint_prefix(base, "http://")) {
+            flint_copy(normalized, base);
+        } else if (flint_is_host_token(base)) {
+            flint_copy(normalized, "http://");
+            flint_copy(normalized + strlen(normalized), base);
+        } else {
+            flint_line("flint: source must be a host or http:// URL", RED, cursor_y);
+            return;
+        }
+        if (flint_ends_with(normalized, "/Packages")) {
+            normalized[strlen(normalized) - strlen("/Packages")] = '\0';
+        }
+        flint_build_urls(normalized);
+        if (!flint_save_source(normalized)) {
+            flint_line("flint: could not save source", RED, cursor_y);
+            return;
+        }
+        flint_line("flint: source saved", GREEN, cursor_y);
+    }
+    flint_line("flint source: ", WHITE, cursor_y);
+    print(flint_index_url, LIGHT_GREY, 14, *cursor_y - 1);
+    flint_line("packages base: ", LIGHT_GREY, cursor_y);
+    print(flint_pkg_base, LIGHT_GREY, 15, *cursor_y - 1);
 }
 
 static void flint_fetch(char **input, int *cursor_y) {
@@ -265,9 +375,9 @@ static void flint_install(const char *query, int *cursor_y) {
         }
     }
 
-    char url[sizeof(FLINT_PKG_BASE) + 192];
+    char url[FLINT_SOURCE_MAX + 192];
     char destination[sizeof(FLINT_PKG_DIR) + 192];
-    flint_copy(url, FLINT_PKG_BASE);
+    flint_copy(url, flint_pkg_base);
     uint32_t url_length = strlen(url);
     flint_copy(url + url_length, package_path);
     flint_copy(destination, FLINT_PKG_DIR "/");
@@ -297,6 +407,7 @@ static void flint_install(const char *query, int *cursor_y) {
 }
 
 void cmd_flint(char *args, int *cursor_y) {
+    flint_load_source();
     char *input = args;
     char *command = cmd_next_token(&input);
 
@@ -309,7 +420,7 @@ void cmd_flint(char *args, int *cursor_y) {
         return;
     }
     if (strcmp(command, "source") == 0) {
-        flint_source(cursor_y);
+        flint_source(cmd_next_token(&input), cursor_y);
         return;
     }
     if (strcmp(command, "fetch") == 0) {

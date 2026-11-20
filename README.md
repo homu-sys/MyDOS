@@ -73,19 +73,30 @@ System:
 
 ## Flint and user binaries
 
-`flint` downloads Gentoo x86 binpackage metadata over plain HTTP from
-`distfiles.gentoo.org`. Run this before searching or installing:
+`flint` downloads MyDOS package metadata over plain HTTP. The package index is
+published in `homu-sys/mydos-packages`; serve that repository with
+`make serve` (port 80, root required). The default source is
+`http://10.0.2.2/`, which is the host gateway for QEMU user networking. Run
+`dhcp` first, then:
 
 ```text
+flint source
 flint sync
-flint search nano
-flint info app-editors/nano-8.6-r1
-flint install app-editors/nano-8.6-r1
+flint search mydos-shell
+flint info app-shells/mydos-shell-1.0.0
+flint install app-shells/mydos-shell-1.0.0
+```
+
+For bridged networking or another HTTP mirror, set the source once using just
+the host/IP; it is saved to `0:/FLINT/SOURCE.TXT`:
+
+```text
+flint source 192.168.1.50
 ```
 
 The index is cached at `0:/FLINT/PACKAGES.TXT`, and downloaded packages are
-stored under `0:/FLINT/PACKAGES/`. MyDOS can download Gentoo `.gpkg.tar` files
-but cannot unpack or merge them yet. HTTPS is not supported.
+stored under `0:/FLINT/PACKAGES/`. `flint install` unpacks `.gpkg.tar` files
+into `BIN`, `USR`, and `ETC`. HTTPS is not supported.
 
 The shell also searches `PATH` (default `.:/BIN:/USR/BIN`) for static ELF32
 binaries. `make doom-disk` copies the sample `hello.elf` to `0:/BIN/HELLO.ELF`;
