@@ -118,5 +118,6 @@ int shell_run_external(const char *name, char *args, int *cursor_y) {
         print(path, WHITE, 22, *cursor_y - 1);
         return 1;
     }
+    *cursor_y = shell_get_cursor_y();
     return 1;
 }

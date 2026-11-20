@@ -18,6 +18,7 @@ unsigned int cmd_elapsed_uptime_seconds(void);
 void cmd_format_short_uptime(unsigned int elapsed, char *out);
 
 void cmd_help(char *args, int *cursor_y);
+void cmd_leinity(char *args, int *cursor_y);
 void cmd_hostname(char *args, int *cursor_y);
 void cmd_user(char *args, int *cursor_y);
 void cmd_whoami(char *args, int *cursor_y);

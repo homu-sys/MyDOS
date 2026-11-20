@@ -29,7 +29,7 @@ void cmd_help(char *args, int *cursor_y) {
         help_row("|   help            clear           echo           change-theme            |", LIGHT_GREY, cursor_y);
         help_row("|   loadkeys        date            uptime          fetch                  |", LIGHT_GREY, cursor_y);
         help_row("|   shlogo          beep            larry           set                    |", LIGHT_GREY, cursor_y);
-        help_row("|   hostname        user            whoami                                 |", LIGHT_GREY, cursor_y);
+        help_row("|   hostname        user            whoami          leinity                |", LIGHT_GREY, cursor_y);
         help_row("| [ NETWORK ]                                                              |", LIGHT_CYAN, cursor_y);
         help_row("|   dhcp            ping            flint                                  |", LIGHT_GREY, cursor_y);
         help_row("| [ POWER ]                                                                |", LIGHT_CYAN, cursor_y);
@@ -78,6 +78,15 @@ void cmd_help(char *args, int *cursor_y) {
               LIGHT_GREY, 0, *cursor_y);
         scrl(cursor_y);
         print("Example: set PS1=\\h:\\w\\$ ", LIGHT_GREY, 0, *cursor_y);
+
+    } else if (strcmp(args, "leinity") == 0) {
+        print("Usage: leinity [reload]", WHITE, 0, *cursor_y);
+        scrl(cursor_y);
+        print("Shows the fast boot supervisor status or reloads its service list.",
+              LIGHT_GREY, 0, *cursor_y);
+        scrl(cursor_y);
+        print("Services are read from ETC/LEINITY/SERVICES.TXT, one command per line.",
+              LIGHT_GREY, 0, *cursor_y);
 
     } else if (strcmp(args, "hostname") == 0) {
         print("Usage: hostname [name]", WHITE, 0, *cursor_y);

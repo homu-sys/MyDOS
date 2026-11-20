@@ -27,6 +27,17 @@ static const char *user_username(void) {
     return identity_username();
 }
 
+static void user_scroll(int *cursor_y) {
+    scrl(cursor_y);
+    shell_set_cursor_y(*cursor_y);
+}
+
+static int user_run_command(const char *command, int *cursor_y) {
+    int result = shell_execute_line(command, cursor_y);
+    shell_set_cursor_y(*cursor_y);
+    return result;
+}
+
 static int user_cursor_y(void) {
     return shell_get_cursor_y();
 }
@@ -38,9 +49,9 @@ static void user_set_cursor_y(int cursor_y) {
 static const mydos_user_api_t user_api = {
     MYDOS_USER_API_VERSION,
     print,
-    scrl,
+    user_scroll,
     keyboard_getchar,
-    shell_execute_line,
+    user_run_command,
     user_getenv,
     user_hostname,
     user_username,

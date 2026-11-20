@@ -24,6 +24,7 @@ static const cmd_entry_t commands[] = {
     {"hostname", cmd_hostname},
     {"kp", cmd_kp},
     {"larry", cmd_larry},
+    {"leinity", cmd_leinity},
     {"loadkeys", cmd_loadkeys},
     {"ls", cmd_ls},
     {"lsdrv", cmd_lsdrv},

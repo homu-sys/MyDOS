@@ -1,5 +1,6 @@
 #include <mydos.h>
 #include <kernel/system/identity.h>
+#include <init/leinity.h>
 
 // GRUB's Multiboot v1 handoff uses these flag bits to mark optional fields. 
 #define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002u
@@ -134,13 +135,15 @@ void KernelEntryPoint(unsigned int magic, unsigned int mbi) {
         scrl(&cursor_y);
     }
 
+    int boot_cursor_y = leinity_boot(fs_result);
+
     // If the filesystem is ready, start the shell.
-    if (fs_result == FR_OK) {shell_run(mbi, cursor_y);}
+    if (fs_result == FR_OK) {shell_run(mbi, boot_cursor_y);}
     // Warn the user if the filesystem is not ready, but still start the shell.
     else {
-        print("Warning: The filesystem is not ready. Some commands may fail.", YELLOW, 0, cursor_y);
-        scrl(&cursor_y);
-        shell_run(mbi, cursor_y);
+        print("Warning: The filesystem is not ready. Some commands may fail.", YELLOW, 0, boot_cursor_y);
+        scrl(&boot_cursor_y);
+        shell_run(mbi, boot_cursor_y);
     }
     
 
