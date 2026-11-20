@@ -27,6 +27,7 @@ LIMINE_DATA_DIR ?= $(shell $(LIMINE) --print-datadir)
 CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -Wall -Wextra -MMD -MP -mno-sse -mno-sse2 -mfpmath=387
 CPPFLAGS := -I src -I src/kernel -I src/lib -I src/fs/fatfs/source -I src/programs/myeditor \
 	-I src/lib/zstd -I src/lib/zstd/common -I src/lib/zstd/decompress \
+	-I src/lib/mbedtls/include -DMBEDTLS_CONFIG_FILE='"mydos_mbedtls_config.h"' \
 	-include src/kernel/pkg/zstd_alloc.h
 
 DOOM_DIR := src/programs/doom

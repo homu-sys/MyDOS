@@ -4,8 +4,8 @@
 #include <net/net.h>
 #include <pkg/pkg.h>
 
-#define FLINT_DEFAULT_INDEX_URL "http://10.0.2.2/Packages"
-#define FLINT_DEFAULT_PKG_BASE "http://10.0.2.2/"
+#define FLINT_DEFAULT_INDEX_URL "https://raw.githubusercontent.com/homu-sys/mydos-packages/main/Packages"
+#define FLINT_DEFAULT_PKG_BASE "https://raw.githubusercontent.com/homu-sys/mydos-packages/main/"
 #define FLINT_SOURCE_PATH "FLINT/SOURCE.TXT"
 #define FLINT_INDEX_PATH "FLINT/PACKAGES.TXT"
 #define FLINT_PKG_DIR "FLINT/PACKAGES"
@@ -62,6 +62,13 @@ static void flint_build_urls(const char *base) {
     flint_copy(flint_index_url + base_length, "Packages");
 }
 
+static int flint_download(const char *url, const char *path) {
+    if (flint_prefix(url, "https://")) {
+        return net_https_get_file(url, path);
+    }
+    return net_http_get_file(url, path);
+}
+
 static void flint_load_source(void) {
     FIL file;
     if (f_open(&file, FLINT_SOURCE_PATH, FA_READ) != FR_OK) {
@@ -80,7 +87,8 @@ static void flint_load_source(void) {
     }
     base[position] = '\0';
     f_close(&file);
-    if (flint_prefix(base, "http://") && position > 0) {
+    if ((flint_prefix(base, "http://") || flint_prefix(base, "https://")) &&
+        position > 0) {
         flint_build_urls(base);
     }
 }
@@ -208,7 +216,7 @@ static void flint_help(int *cursor_y) {
     flint_line("  search <term>        search cached package names", LIGHT_GREY, cursor_y);
     flint_line("  info <atom>          show package metadata", LIGHT_GREY, cursor_y);
     flint_line("  install <atom>       download and install a .gpkg.tar package", LIGHT_GREY, cursor_y);
-    flint_line("  fetch <url> <dest>   download any plain HTTP URL", LIGHT_GREY, cursor_y);
+    flint_line("  fetch <url> <dest>   download an HTTP or HTTPS URL", LIGHT_GREY, cursor_y);
     flint_line("  source [host|url]    show or set package source", LIGHT_GREY, cursor_y);
     flint_line("Packages are unpacked into BIN, USR, and ETC.", YELLOW, cursor_y);
 }
@@ -216,7 +224,7 @@ static void flint_help(int *cursor_y) {
 static void flint_sync(int *cursor_y) {
     flint_ensure_dirs();
     flint_line("flint: syncing MyDOS package index...", WHITE, cursor_y);
-    if (net_http_get_file(flint_index_url, FLINT_INDEX_PATH)) {
+    if (flint_download(flint_index_url, FLINT_INDEX_PATH)) {
         flint_line("flint: index saved to FLINT/PACKAGES.TXT", GREEN, cursor_y);
     } else {
         flint_line("flint: sync failed; source: ", RED, cursor_y);
@@ -227,13 +235,13 @@ static void flint_sync(int *cursor_y) {
 static void flint_source(const char *base, int *cursor_y) {
     if (base != 0) {
         char normalized[FLINT_SOURCE_MAX];
-        if (flint_prefix(base, "http://")) {
+        if (flint_prefix(base, "http://") || flint_prefix(base, "https://")) {
             flint_copy(normalized, base);
         } else if (flint_is_host_token(base)) {
             flint_copy(normalized, "http://");
             flint_copy(normalized + strlen(normalized), base);
         } else {
-            flint_line("flint: source must be a host or http:// URL", RED, cursor_y);
+            flint_line("flint: source must be a host or HTTP(S) URL", RED, cursor_y);
             return;
         }
         if (flint_ends_with(normalized, "/Packages")) {
@@ -260,7 +268,7 @@ static void flint_fetch(char **input, int *cursor_y) {
         return;
     }
     flint_line("flint: downloading...", WHITE, cursor_y);
-    if (net_http_get_file(url, destination)) {
+    if (flint_download(url, destination)) {
         flint_line("flint: download complete", GREEN, cursor_y);
     } else {
         flint_line("flint: download failed", RED, cursor_y);
@@ -387,7 +395,7 @@ static void flint_install(const char *query, int *cursor_y) {
     flint_ensure_dirs();
     flint_line("flint: downloading " , WHITE, cursor_y);
     print(package_path, LIGHT_GREY, 18, *cursor_y - 1);
-    if (!net_http_get_file(url, destination)) {
+    if (!flint_download(url, destination)) {
         flint_line("flint: package download failed", RED, cursor_y);
         return;
     }

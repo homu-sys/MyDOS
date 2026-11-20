@@ -4,6 +4,8 @@
 #include <net/net_timer.h>
 #include <net/tcp.h>
 
+void *memmove(void *destination, const void *source, unsigned int count);
+
 #define TCP_SYN 0x02u
 #define TCP_RST 0x04u
 #define TCP_PSH 0x08u
@@ -13,6 +15,7 @@
 #define TCP_WINDOW 8192u
 #define TCP_CONNECT_TIMEOUT_MS 1000u
 #define TCP_RECV_TIMEOUT_MS 8000u
+#define TCP_RX_BUFFER_SIZE 16384u
 
 typedef struct __attribute__((packed)) {
     uint8_t destination[6];
@@ -57,6 +60,29 @@ static uint8_t tcp_frame[NET_MAX_FRAME];
 static uint8_t tcp_receive_frame[NET_MAX_FRAME];
 static uint8_t tcp_checksum_block[12 + NET_MAX_FRAME];
 static uint16_t tcp_ip_id;
+static uint8_t tcp_rx_buffer[TCP_RX_BUFFER_SIZE];
+static uint32_t tcp_rx_start;
+static uint32_t tcp_rx_end;
+static int tcp_rx_eof;
+
+static void tcp_rx_reset(void) {
+    tcp_rx_start = 0;
+    tcp_rx_end = 0;
+    tcp_rx_eof = 0;
+}
+
+static uint32_t tcp_rx_available(void) {
+    return tcp_rx_end - tcp_rx_start;
+}
+
+static void tcp_rx_compact(void) {
+    uint32_t available = tcp_rx_available();
+    if (tcp_rx_start != 0) {
+        memmove(tcp_rx_buffer, tcp_rx_buffer + tcp_rx_start, available);
+        tcp_rx_start = 0;
+        tcp_rx_end = available;
+    }
+}
 
 static uint16_t tcp_be16(uint16_t value) {
     return (uint16_t)((value << 8) | (value >> 8));
@@ -227,6 +253,7 @@ int tcp_connect(tcp_socket_t *socket, uint32_t server_ip, uint16_t server_port) 
         return 0;
     }
     memset(socket, 0, sizeof(*socket));
+    tcp_rx_reset();
     if (!tcp_resolve_route(socket, server_ip)) {
         return 0;
     }
@@ -291,41 +318,50 @@ int tcp_send(tcp_socket_t *socket, const uint8_t *data, uint32_t length) {
 
 int tcp_recv(tcp_socket_t *socket, uint8_t *buffer, uint32_t capacity,
              uint32_t timeout_ms, uint32_t *received) {
-    if (socket == 0 || buffer == 0 || received == 0 || !socket->connected) {
+    if (socket == 0 || buffer == 0 || received == 0) {
         return -1;
     }
     *received = 0;
+    if (!socket->connected && tcp_rx_available() == 0 && !tcp_rx_eof) {
+        return -1;
+    }
 
     net_timer_t timer;
     net_timer_begin(&timer);
-    while (net_timer_elapsed_ms(&timer) < timeout_ms) {
+    int idle = 0;
+    int closed = 0;
+    while (net_timer_elapsed_ms(&timer) < timeout_ms && !closed) {
         int length = net_receive(tcp_receive_frame, sizeof(tcp_receive_frame));
         if (length <= 0) {
+            if (tcp_rx_available() != 0 && ++idle > 16) {
+                break;
+            }
             continue;
         }
+        idle = 0;
         tcp_incoming_t incoming;
         if (!tcp_parse_frame(tcp_receive_frame, length, socket, &incoming)) {
             continue;
         }
         if ((incoming.flags & TCP_RST) != 0) {
             socket->connected = 0;
-            net_timer_end();
-            return 0;
+            closed = 1;
+            break;
         }
         if (incoming.payload_length != 0) {
-            uint32_t copy_length = incoming.payload_length;
-            if (copy_length > capacity) {
-                copy_length = capacity;
+            tcp_rx_compact();
+            uint32_t space = TCP_RX_BUFFER_SIZE - tcp_rx_end;
+            uint32_t append_length = incoming.payload_length;
+            if (append_length > space) {
+                append_length = space;
             }
-            memcpy(buffer, incoming.payload, copy_length);
-            *received = copy_length;
+            memcpy(tcp_rx_buffer + tcp_rx_end, incoming.payload, append_length);
+            tcp_rx_end += append_length;
             socket->acknowledgment = incoming.sequence + incoming.payload_length;
             uint16_t frame_length = tcp_build_frame(socket, TCP_ACK, 0, 0);
             if (frame_length != 0) {
                 net_send(tcp_frame, frame_length);
             }
-            net_timer_end();
-            return 1;
         }
         if ((incoming.flags & TCP_FIN) != 0) {
             socket->acknowledgment = incoming.sequence + 1;
@@ -333,13 +369,26 @@ int tcp_recv(tcp_socket_t *socket, uint8_t *buffer, uint32_t capacity,
             if (frame_length != 0) {
                 net_send(tcp_frame, frame_length);
             }
+            tcp_rx_eof = 1;
             socket->connected = 0;
-            net_timer_end();
-            return 0;
+            closed = 1;
         }
     }
     net_timer_end();
-    return -1;
+
+    uint32_t available = tcp_rx_available();
+    if (available == 0) {
+        tcp_rx_reset();
+        return 0;
+    }
+    uint32_t copy_length = available < capacity ? available : capacity;
+    memcpy(buffer, tcp_rx_buffer + tcp_rx_start, copy_length);
+    tcp_rx_start += copy_length;
+    if (tcp_rx_start == tcp_rx_end) {
+        tcp_rx_reset();
+    }
+    *received = copy_length;
+    return 1;
 }
 
 void tcp_close(tcp_socket_t *socket) {
@@ -352,4 +401,6 @@ void tcp_close(tcp_socket_t *socket) {
         socket->sequence++;
     }
     socket->connected = 0;
+    tcp_rx_reset();
 }
+

@@ -60,6 +60,50 @@ char* strchr(const char* string, int character) {
     return character == '\0' ? (char*)string : 0;
 }
 
+char* strstr(const char* haystack, const char* needle) {
+    if (*needle == '\0') return (char*)haystack;
+    while (*haystack != '\0') {
+        const char* current = haystack;
+        const char* search = needle;
+        while (*current != '\0' && *search != '\0' && *current == *search) {
+            current++;
+            search++;
+        }
+        if (*search == '\0') return (char*)haystack;
+        haystack++;
+    }
+    return 0;
+}
+
+void explicit_bzero(void* destination, unsigned int count) {
+    memset(destination, 0, count);
+}
+
+int inet_pton(int family, const char* text, void* output) {
+    unsigned char* bytes = (unsigned char*)output;
+    unsigned int value = 0;
+    int digits = 0;
+    int part = 0;
+    if (family != 2) return 0;
+    while (*text != '\0' && part < 4) {
+        if (*text >= '0' && *text <= '9') {
+            value = value * 10u + (unsigned int)(*text - '0');
+            digits++;
+            if (digits > 3 || value > 255u) return 0;
+        } else if (*text == '.' && digits > 0 && part < 3) {
+            bytes[part++] = (unsigned char)value;
+            value = 0;
+            digits = 0;
+        } else {
+            return 0;
+        }
+        text++;
+    }
+    if (part != 3 || digits == 0) return 0;
+    bytes[3] = (unsigned char)value;
+    return 1;
+}
+
 void itoanum(unsigned int value, char out[32]) {
     char tmp[32];
     int i = 0;

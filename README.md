@@ -19,7 +19,7 @@ Prebuilt ISO releases are available on the
 - Keyboard-only shell with US, German, and French layouts
 - FatFs filesystem support, with FAT32 formatting as the main option but theres FAT12/FAT16 too.
 - ATA/IDE and AHCI SATA disk access
-- DHCP, ICMP ping, DNS, TCP, and plain HTTP over Intel e1000 and Realtek RTL8139/8129 Ethernet controllers
+- DHCP, ICMP ping, DNS, TCP, HTTP, and verified HTTPS over Intel e1000 and Realtek RTL8139/8129 Ethernet controllers
 - `flint` package manager for Gentoo x86 binpackage metadata and downloads
 - PATH-based execution for static ELF32 user binaries
 - Built-in text editor and calculator
@@ -73,11 +73,10 @@ System:
 
 ## Flint and user binaries
 
-`flint` downloads MyDOS package metadata over plain HTTP. The package index is
-published in `homu-sys/mydos-packages`; serve that repository with
-`make serve` (port 80, root required). The default source is
-`http://10.0.2.2/`, which is the host gateway for QEMU user networking. Run
-`dhcp` first, then:
+`flint` downloads MyDOS package metadata over verified HTTPS from
+`homu-sys/mydos-packages` on GitHub raw. The default source is
+`https://raw.githubusercontent.com/homu-sys/mydos-packages/main/`. Run `dhcp`
+first, then:
 
 ```text
 flint source
@@ -87,16 +86,17 @@ flint info app-shells/mydos-shell-1.0.0
 flint install app-shells/mydos-shell-1.0.0
 ```
 
-For bridged networking or another HTTP mirror, set the source once using just
-the host/IP; it is saved to `0:/FLINT/SOURCE.TXT`:
+For a local HTTP mirror, set the source once using just the host/IP; it is saved
+to `0:/FLINT/SOURCE.TXT`:
 
 ```text
 flint source 192.168.1.50
 ```
 
-The index is cached at `0:/FLINT/PACKAGES.TXT`, and downloaded packages are
-stored under `0:/FLINT/PACKAGES/`. `flint install` unpacks `.gpkg.tar` files
-into `BIN`, `USR`, and `ETC`. HTTPS is not supported.
+A full HTTP or HTTPS URL is also accepted. The index is cached at
+`0:/FLINT/PACKAGES.TXT`, and downloaded packages are stored under
+`0:/FLINT/PACKAGES/`. `flint install` unpacks `.gpkg.tar` files into `BIN`,
+`USR`, and `ETC`.
 
 The shell also searches `PATH` (default `.:/BIN:/USR/BIN`) for static ELF32
 binaries. `make doom-disk` copies the sample `hello.elf` to `0:/BIN/HELLO.ELF`;
@@ -106,7 +106,7 @@ process isolation and receive a small API table as the third `main` argument.
 ## Source layout
 
 - `src/kernel/cmd/` - one file per shell command, plus the command table/dispatcher
-- `src/kernel/net/` - networking core, DHCP, ARP/ICMP, DNS, TCP, HTTP, PCI, and NIC drivers
+- `src/kernel/net/` - networking core, DHCP, ARP/ICMP, DNS, TCP, HTTP/HTTPS/TLS, PCI, and NIC drivers
 - `src/kernel/elf/` - static ELF32 loader for user binaries
 - `src/kernel/shell/` - shell input/line editing, PATH lookup, and the `PS1` prompt renderer
 - `src/kernel/drivers/` - VGA, keyboard, RTC, AHCI, and PC speaker drivers

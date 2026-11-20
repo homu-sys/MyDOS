@@ -100,6 +100,9 @@ void *memset(void *destination, int value, unsigned int count);
 void *memcpy(void *destination, const void *source, unsigned int count);
 int memcmp(const void *first, const void *second, unsigned int count);
 char *strchr(const char *string, int character);
+char *strstr(const char *haystack, const char *needle);
+void explicit_bzero(void *destination, unsigned int count);
+int inet_pton(int family, const char *text, void *output);
 void itoanum(unsigned int value, char out[32]);
 void itohex(unsigned int value, char out[11]);
 

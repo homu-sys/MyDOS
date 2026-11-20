@@ -2,6 +2,12 @@
 #include <net/net.h>
 #include <net/tcp.h>
 #include <ff.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/error.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/x509_crt.h>
+#include "github_ca.h"
 
 #define HTTP_HOST_MAX 128
 #define HTTP_PATH_MAX 192
@@ -9,11 +15,26 @@
 #define HTTP_BUFFER_SIZE NET_MAX_FRAME
 #define HTTP_RECV_TIMEOUT_MS 8000u
 
+static int http_append(char *out, uint32_t capacity, uint32_t *position,
+                       const char *text);
+
 typedef struct {
     char host[HTTP_HOST_MAX];
     uint16_t port;
+    int secure;
     char path[HTTP_PATH_MAX];
 } http_url_t;
+
+typedef struct {
+    tcp_socket_t socket;
+    int secure;
+    int tls_ready;
+    mbedtls_ssl_context ssl;
+    mbedtls_ssl_config config;
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_x509_crt ca;
+} http_connection_t;
 
 static int http_lower(int character) {
     if (character >= 'A' && character <= 'Z') {
@@ -61,10 +82,17 @@ static int http_parse_uint(const char *text, uint32_t *value) {
 }
 
 static int http_parse_url(const char *url, http_url_t *out) {
-    if (!http_prefix(url, "http://")) {
+    uint32_t scheme_length;
+    if (http_prefix(url, "https://")) {
+        scheme_length = 8;
+        out->secure = 1;
+    } else if (http_prefix(url, "http://")) {
+        scheme_length = 7;
+        out->secure = 0;
+    } else {
         return 0;
     }
-    const char *host_start = url + 7;
+    const char *host_start = url + scheme_length;
     const char *host_end = strchr(host_start, '/');
     if (host_end == 0) {
         host_end = host_start + strlen(host_start);
@@ -82,7 +110,7 @@ static int http_parse_url(const char *url, http_url_t *out) {
     }
 
     uint32_t actual_host_length = host_length;
-    out->port = 80;
+    out->port = out->secure ? 443 : 80;
     if (port_separator != 0) {
         actual_host_length = (uint32_t)(port_separator - host_start);
         uint32_t port = 0;
@@ -107,6 +135,140 @@ static int http_parse_url(const char *url, http_url_t *out) {
         http_copy(out->path, "/");
     }
     return 1;
+}
+
+static int http_tls_send(void *context, const unsigned char *data, size_t length) {
+    http_connection_t *connection = (http_connection_t *)context;
+    size_t sent = 0;
+    while (sent < length) {
+        uint32_t chunk = length - sent;
+        if (chunk > 1200) {
+            chunk = 1200;
+        }
+        if (!tcp_send(&connection->socket, data + sent, chunk)) {
+            return sent == 0 ? -1 : (int)sent;
+        }
+        sent += chunk;
+    }
+    return (int)length;
+}
+
+static int http_tls_recv(void *context, unsigned char *buffer, size_t capacity) {
+    http_connection_t *connection = (http_connection_t *)context;
+    uint32_t received = 0;
+    int result = tcp_recv(&connection->socket, buffer, (uint32_t)capacity,
+                          HTTP_RECV_TIMEOUT_MS, &received);
+    if (result < 0) {
+        return MBEDTLS_ERR_SSL_WANT_READ;
+    }
+    return result == 0 ? 0 : (int)received;
+}
+
+static void http_tls_release(http_connection_t *connection) {
+    if (connection->tls_ready) {
+        mbedtls_ssl_close_notify(&connection->ssl);
+        connection->tls_ready = 0;
+    }
+    mbedtls_ssl_free(&connection->ssl);
+    mbedtls_ssl_config_free(&connection->config);
+    mbedtls_ctr_drbg_free(&connection->ctr_drbg);
+    mbedtls_entropy_free(&connection->entropy);
+    mbedtls_x509_crt_free(&connection->ca);
+}
+
+static int http_tls_setup(http_connection_t *connection, const char *host) {
+    int result;
+    mydos_tls_platform_init();
+    mbedtls_ssl_init(&connection->ssl);
+    mbedtls_ssl_config_init(&connection->config);
+    mbedtls_entropy_init(&connection->entropy);
+    mbedtls_ctr_drbg_init(&connection->ctr_drbg);
+    mbedtls_x509_crt_init(&connection->ca);
+
+    result = mbedtls_ctr_drbg_seed(&connection->ctr_drbg, mbedtls_entropy_func,
+                                   &connection->entropy,
+                                   (const unsigned char *)"mydos-flint-tls", 15);
+    if (result != 0) {
+        http_tls_release(connection);
+        return 0;
+    }
+    result = mbedtls_x509_crt_parse(&connection->ca,
+                                    (const unsigned char *)mydos_github_ca_pem,
+                                    sizeof(mydos_github_ca_pem));
+    if (result != 0) {
+        http_tls_release(connection);
+        return 0;
+    }
+    result = mbedtls_ssl_config_defaults(&connection->config,
+                                         MBEDTLS_SSL_IS_CLIENT,
+                                         MBEDTLS_SSL_TRANSPORT_STREAM,
+                                         MBEDTLS_SSL_PRESET_DEFAULT);
+    if (result != 0) {
+        http_tls_release(connection);
+        return 0;
+    }
+    mbedtls_ssl_conf_authmode(&connection->config, MBEDTLS_SSL_VERIFY_REQUIRED);
+    mbedtls_ssl_conf_ca_chain(&connection->config, &connection->ca, 0);
+    mbedtls_ssl_conf_rng(&connection->config, mbedtls_ctr_drbg_random,
+                         &connection->ctr_drbg);
+    result = mbedtls_ssl_set_hostname(&connection->ssl, host);
+    if (result != 0) {
+        http_tls_release(connection);
+        return 0;
+    }
+    result = mbedtls_ssl_setup(&connection->ssl, &connection->config);
+    if (result != 0) {
+        http_tls_release(connection);
+        return 0;
+    }
+    mbedtls_ssl_set_bio(&connection->ssl, connection, http_tls_send,
+                        http_tls_recv, 0);
+    result = mbedtls_ssl_handshake(&connection->ssl);
+    if (result != 0) {
+        http_tls_release(connection);
+        return 0;
+    }
+    connection->tls_ready = 1;
+    return 1;
+}
+
+static int http_connection_send(http_connection_t *connection,
+                                const uint8_t *data, uint32_t length) {
+    if (!connection->secure) {
+        return tcp_send(&connection->socket, data, length);
+    }
+    uint32_t sent = 0;
+    while (sent < length) {
+        int result = mbedtls_ssl_write(&connection->ssl, data + sent,
+                                       length - sent);
+        if (result <= 0) {
+            return 0;
+        }
+        sent += (uint32_t)result;
+    }
+    return 1;
+}
+
+static int http_connection_recv(http_connection_t *connection, uint8_t *buffer,
+                                uint32_t capacity, uint32_t *received) {
+    if (!connection->secure) {
+        return tcp_recv(&connection->socket, buffer, capacity,
+                        HTTP_RECV_TIMEOUT_MS, received);
+    }
+    *received = 0;
+    int result = mbedtls_ssl_read(&connection->ssl, buffer, capacity);
+    if (result < 0) {
+        return -1;
+    }
+    *received = (uint32_t)result;
+    return result == 0 ? 0 : 1;
+}
+
+static void http_connection_close(http_connection_t *connection) {
+    if (connection->secure) {
+        http_tls_release(connection);
+    }
+    tcp_close(&connection->socket);
 }
 
 static const char *http_header_end(const char *header) {
@@ -168,7 +330,8 @@ static int http_append(char *out, uint32_t capacity, uint32_t *position,
 
 static int http_redirect_url(const http_url_t *source, const char *location,
                              char *out, uint32_t capacity) {
-    if (http_prefix(location, "http://")) {
+    if (http_prefix(location, "http://") ||
+        http_prefix(location, "https://")) {
         uint32_t length = (uint32_t)strlen(location);
         if (length >= capacity) {
             return 0;
@@ -180,11 +343,12 @@ static int http_redirect_url(const http_url_t *source, const char *location,
         return 0;
     }
     uint32_t position = 0;
-    if (!http_append(out, capacity, &position, "http://") ||
+    if (!http_append(out, capacity, &position,
+                     source->secure ? "https://" : "http://") ||
         !http_append(out, capacity, &position, source->host)) {
         return 0;
     }
-    if (source->port != 80) {
+    if (source->port != (source->secure ? 443u : 80u)) {
         char port[16];
         port[0] = ':';
         uint32_t value = source->port;
@@ -231,9 +395,16 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
         return 0;
     }
 
-    tcp_socket_t socket;
-    if (!tcp_connect(&socket, server_ip, parsed.port)) {
+    static http_connection_t connection;
+    memset(&connection, 0, sizeof(connection));
+    connection.secure = parsed.secure;
+    if (!tcp_connect(&connection.socket, server_ip, parsed.port)) {
         print("flint: connection failed", RED, 0, 42);
+        return 0;
+    }
+    if (connection.secure && !http_tls_setup(&connection, parsed.host)) {
+        tcp_close(&connection.socket);
+        print("flint: secure handshake failed", RED, 0, 42);
         return 0;
     }
 
@@ -246,8 +417,9 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
     http_append(request, sizeof(request), &request_length,
                 "\r\nConnection: close\r\nUser-Agent: MyDOS-flint/1.0\r\n\r\n");
     request[request_length] = '\0';
-    if (!tcp_send(&socket, (const uint8_t *)request, (uint32_t)strlen(request))) {
-        tcp_close(&socket);
+    if (!http_connection_send(&connection, (const uint8_t *)request,
+                              (uint32_t)strlen(request))) {
+        http_connection_close(&connection);
         return 0;
     }
 
@@ -260,10 +432,10 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
 
     while (header_length < HTTP_HEADER_MAX) {
         uint32_t received = 0;
-        int result = tcp_recv(&socket, buffer, sizeof(buffer),
-                              HTTP_RECV_TIMEOUT_MS, &received);
+        int result = http_connection_recv(&connection, buffer, sizeof(buffer),
+                                          &received);
         if (result < 0) {
-            tcp_close(&socket);
+            http_connection_close(&connection);
             print("flint: request timed out", RED, 0, 42);
             return 0;
         }
@@ -285,7 +457,7 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
     }
 
     if (body == 0) {
-        tcp_close(&socket);
+        http_connection_close(&connection);
         return 0;
     }
 
@@ -296,10 +468,10 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
         if ((status == 301 || status == 302 || status == 303 || status == 307) &&
             http_header_value(header, "Location:", location, sizeof(location)) &&
             http_redirect_url(&parsed, location, redirect, sizeof(redirect))) {
-            tcp_close(&socket);
+            http_connection_close(&connection);
             return http_get_file_internal(redirect, path, depth + 1);
         }
-        tcp_close(&socket);
+        http_connection_close(&connection);
         print("flint: download failed", RED, 0, 42);
         return 0;
     }
@@ -307,7 +479,7 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
     char transfer[32];
     if (http_header_value(header, "Transfer-Encoding:", transfer, sizeof(transfer)) &&
         http_prefix(transfer, "chunked")) {
-        tcp_close(&socket);
+        http_connection_close(&connection);
         print("flint: chunked responses are not supported", RED, 0, 42);
         return 0;
     }
@@ -320,7 +492,7 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
 
     FIL file;
     if (f_open(&file, path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
-        tcp_close(&socket);
+        http_connection_close(&connection);
         print("flint: could not create file", RED, 0, 42);
         return 0;
     }
@@ -329,15 +501,15 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
     uint32_t initial = header_length - body_offset;
     if (initial != 0 && !http_write(&file, (const uint8_t *)body, initial)) {
         f_close(&file);
-        tcp_close(&socket);
+        http_connection_close(&connection);
         return 0;
     }
     written_total += initial;
 
     while (!closed && (!has_length || written_total < content_length)) {
         uint32_t received = 0;
-        int result = tcp_recv(&socket, buffer, sizeof(buffer),
-                              HTTP_RECV_TIMEOUT_MS, &received);
+        int result = http_connection_recv(&connection, buffer, sizeof(buffer),
+                                          &received);
         if (result < 0) {
             break;
         }
@@ -350,14 +522,14 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
         }
         if (remaining != 0 && !http_write(&file, buffer, remaining)) {
             f_close(&file);
-            tcp_close(&socket);
+            http_connection_close(&connection);
             return 0;
         }
         written_total += remaining;
     }
 
     f_close(&file);
-    tcp_close(&socket);
+    http_connection_close(&connection);
     if (has_length && written_total < content_length) {
         return 0;
     }
@@ -365,5 +537,9 @@ static int http_get_file_internal(const char *url, const char *path, int depth) 
 }
 
 int net_http_get_file(const char *url, const char *path) {
+    return http_get_file_internal(url, path, 0);
+}
+
+int net_https_get_file(const char *url, const char *path) {
     return http_get_file_internal(url, path, 0);
 }
